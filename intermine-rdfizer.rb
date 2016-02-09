@@ -103,13 +103,8 @@ def record2rdf row, obj
   id = fields[id_index].split("=")[1]
   # id_sha256 = Digest::SHA256.hexdigest(id.split("=")[1])[-20..-1]
 
-<<<<<<< Updated upstream
-  datatype = @arg[:baseuri] + "/resource/" + obj
-  subject = @arg[:baseuri] + "/#{obj.downcase}:#{id}"
-=======
   datatype = @arg[:uri] + "/resource/" + obj
-  subject = @arg[:uri] + "/#{@db_name}:#{id}"
->>>>>>> Stashed changes
+  subject = @arg[:uri] + "/#{obj.downcase}:#{id}"
 
   # Object Table Ressource
   statement = RDF::Statement.new(RDF::URI("#{subject}"), RDF::URI(RDF_TYPE), RDF::URI(datatype))
@@ -158,13 +153,8 @@ def recordlink2rdf row, obj1, obj2, bothways
   id2 = fields[1].split("=")[1]
   # id2_sha256 = Digest::SHA256.hexdigest(id2)[-20..-1]
 
-<<<<<<< Updated upstream
-  subject = @arg[:baseuri] + "/#{obj1.downcase}:#{id1}"
-  object = @arg[:baseuri] + "/#{obj2.downcase}:#{id2}"
-=======
-  subject = @arg[:uri] + "/#{@db_name}:#{id1}"
-  object = @arg[:uri] + "/#{@db_name}:#{id2}"
->>>>>>> Stashed changes
+  subject = @arg[:uri] + "/#{obj1.downcase}:#{id1}"
+  object = @arg[:uri] + "/#{obj2.downcase}:#{id2}"
 
   qd = RDF::Graph.new()
   if bothways
@@ -197,25 +187,15 @@ def subClassOf row, child_obj, parent_obj
 
   # object inherit from parent object ??
   # TODO find another predicate here
-<<<<<<< Updated upstream
+
   File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
     qd = RDF::Graph.new()
-    s = @arg[:baseuri] + "/#{child_obj.downcase}:#{id}"
+    s = @arg[:uri] + "/#{child_obj.downcase}:#{id}"
     p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
-    o = @arg[:baseuri] + "/#{parent_obj.downcase}:#{id}"
+    o = @arg[:uri] + "/#{parent_obj.downcase}:#{id}"
     qd = serialize_quad([s, p ,o], false)
     fout.write(qd.dump(:nquads))
   end
-=======
-  # File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
-  #   qd = RDF::Graph.new()
-  #   s = @arg[:uri] + "/#{child_obj.downcase}:#{id}"
-  #   p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
-  #   o = @arg[:uri] + "/#{parent_obj.downcase}:#{id}"
-  #   qd = serialize_quad([s, p ,o], false)
-  #   fout.write(qd.dump(:nquads))
-  # end
->>>>>>> Stashed changes
 
   # class subClassOf parent class
   File.open("#{@arg[:output]}/Classes.nq", "a") do |fout|
