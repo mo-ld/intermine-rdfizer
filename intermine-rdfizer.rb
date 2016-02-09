@@ -576,7 +576,7 @@ job = ARGV[0].downcase
 @arg[:download] = 0
 @arg[:rdfize] = 0
 @arg[:conf] = ""
-@arg[:baseuri] = ""
+@arg[:uri] = ""
 
 # reading opts
 for i in 0..ARGV.length-1
