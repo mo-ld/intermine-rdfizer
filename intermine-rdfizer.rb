@@ -18,7 +18,7 @@ require 'benchmark'
 
 
 # CORE RDF URI
-# @arg[:baseuri] = "http://purl.intermine.org"
+# @arg[:uri] = "http://purl.intermine.org"
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 RDF_VALUE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#value"
 
@@ -56,8 +56,8 @@ def serialize_quad quad_ary, extend
 
   if extend
 
-    att_sbj = @arg[:baseuri] + "/mine_attribute:" + Digest::SHA256.hexdigest(quad_ary[2][:type].to_s+quad_ary[2][:value].to_s)[-20..-1]
-    att_type = @arg[:baseuri] + "/mine_type:" + quad_ary[2][:type]
+    att_sbj = @arg[:uri] + "/mine_attribute:" + Digest::SHA256.hexdigest(quad_ary[2][:type].to_s+quad_ary[2][:value].to_s)[-20..-1]
+    att_type = @arg[:uri] + "/mine_type:" + quad_ary[2][:type]
     att_value = "#{quad_ary[2][:value].to_s}"
 
     statements = []
@@ -103,8 +103,8 @@ def record2rdf row, obj
   id = fields[id_index].split("=")[1]
   # id_sha256 = Digest::SHA256.hexdigest(id.split("=")[1])[-20..-1]
 
-  datatype = @arg[:baseuri] + "/resource/" + obj
-  subject = @arg[:baseuri] + "/#{@db_name}:#{id}"
+  datatype = @arg[:uri] + "/resource/" + obj
+  subject = @arg[:uri] + "/#{@db_name}:#{id}"
 
   # Object Table Ressource
   statement = RDF::Statement.new(RDF::URI("#{subject}"), RDF::URI(RDF_TYPE), RDF::URI(datatype))
@@ -129,7 +129,7 @@ def record2rdf row, obj
       else
         type = f_ary[0]
         type[0] = f_ary[0][0].upcase
-        p = @arg[:baseuri] + "/mine_vocabulary:has#{type}"
+        p = @arg[:uri] + "/mine_vocabulary:has#{type}"
         qd = serialize_quad(["#{subject}", "#{p}", {type: f_ary[0], value: f_ary[1]}], true)
       end
 
@@ -153,19 +153,19 @@ def recordlink2rdf row, obj1, obj2, bothways
   id2 = fields[1].split("=")[1]
   # id2_sha256 = Digest::SHA256.hexdigest(id2)[-20..-1]
 
-  subject = @arg[:baseuri] + "/#{@db_name}:#{id1}"
-  object = @arg[:baseuri] + "/#{@db_name}:#{id2}"
+  subject = @arg[:uri] + "/#{@db_name}:#{id1}"
+  object = @arg[:uri] + "/#{@db_name}:#{id2}"
 
   qd = RDF::Graph.new()
   if bothways
-    p = @arg[:baseuri] + "/mine_vocabulary:has#{obj1}"
+    p = @arg[:uri] + "/mine_vocabulary:has#{obj1}"
     qd = serialize_quad(["#{object}", "#{p}", "#{subject}"], false)
     fout.write(qd.dump(:nquads))
-    p = @arg[:baseuri] + "/mine_vocabulary:has#{obj2}"
+    p = @arg[:uri] + "/mine_vocabulary:has#{obj2}"
     qd = serialize_quad(["#{subject}", "#{p}", "#{object}"], false)
     fout.write(qd.dump(:nquads))
   else
-    p = @arg[:baseuri] + "/mine_vocabulary:has#{obj1}"
+    p = @arg[:uri] + "/mine_vocabulary:has#{obj1}"
     qd = serialize_quad(["#{object}", "#{p}", "#{subject}"], false)
     fout.write(qd.dump(:nquads))
   end
@@ -187,11 +187,12 @@ def subClassOf row, child_obj, parent_obj
 
   # object inherit from parent object ??
   # TODO find another predicate here
+
   # File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
   #   qd = RDF::Graph.new()
-  #   s = @arg[:baseuri] + "/#{child_obj.downcase}:#{id}"
+  #   s = @arg[:uri] + "/#{child_obj.downcase}:#{id}"
   #   p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
-  #   o = @arg[:baseuri] + "/#{parent_obj.downcase}:#{id}"
+  #   o = @arg[:uri] + "/#{parent_obj.downcase}:#{id}"
   #   qd = serialize_quad([s, p ,o], false)
   #   fout.write(qd.dump(:nquads))
   # end
@@ -199,9 +200,9 @@ def subClassOf row, child_obj, parent_obj
   # class subClassOf parent class
   File.open("#{@arg[:output]}/Classes.nq", "a") do |fout|
     qd = RDF::Graph.new()
-    s = @arg[:baseuri] + "/resource/#{parent_obj}"
+    s = @arg[:uri] + "/resource/#{parent_obj}"
     p = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
-    o = @arg[:baseuri] + "/resource/#{child_obj}"
+    o = @arg[:uri] + "/resource/#{child_obj}"
     qd = serialize_quad([s, p ,o], false)
     fout.write(qd.dump(:nquads))
   end
@@ -512,7 +513,7 @@ def set_configuration
     file << open("#{@arg[:endpoint]}/service/model").read
   end
 
-  
+
   @db_name = ""
   @arg[:endpoint].split("/").reverse.each do |n|
     if n != ""
@@ -521,10 +522,10 @@ def set_configuration
     end
   end
 
-  if @arg[:baseuri] == ""
-    @arg[:baseuri] = "http://#{@db_name}.intermine.org"
-  elsif @arg[:baseuri][-1] == "/"
-    @arg[:baseuri][-1] = @arg[:baseuri][0..-2]
+  if @arg[:uri] == ""
+    @arg[:uri] = "http://#{@db_name}.intermine.org"
+  elsif @arg[:uri][-1] == "/"
+    @arg[:uri][-1] = @arg[:uri][0..-2]
   end
 
   # will set @all_obj
