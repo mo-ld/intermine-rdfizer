@@ -598,7 +598,7 @@ if (@arg[:download] + @arg[:rdfize]) == 0
 end
 
 nb_of_opt = 0
-mandatory_keys = [:endpoint, :baseuri, :conf, :output, :download, :rdfize, :log]
+mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log]
 
 @arg.each_key do |k|
   nb_of_opt += 1
