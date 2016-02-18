@@ -103,8 +103,12 @@ def record2rdf row, obj
   id = fields[id_index].split("=")[1]
   # id_sha256 = Digest::SHA256.hexdigest(id.split("=")[1])[-20..-1]
 
-  datatype = @arg[:uri] + "/resource/" + obj
+  datatype = @arg[:uri] + "/resource/#{@db_name}_" + obj
   subject = @arg[:uri] + "/#{@db_name}:#{id}"
+  # if loosely coupled
+  if @arg[:lcoupled] == 1
+    subject = @arg[:uri] + "/#{@db_name}_#{obj}:#{id}"
+  end
 
   # Object Table Ressource
   statement = RDF::Statement.new(RDF::URI("#{subject}"), RDF::URI(RDF_TYPE), RDF::URI(datatype))
@@ -149,12 +153,16 @@ def recordlink2rdf row, obj1, obj2, bothways
   fields = row.to_s.chomp.gsub(/^.*: /,"").split(",\t")
   fields.each { |f| f.strip! }
   id1 = fields[0].split("=")[1]
-  # id1_sha256 = Digest::SHA256.hexdigest(id1)[-20..-1]
   id2 = fields[1].split("=")[1]
-  # id2_sha256 = Digest::SHA256.hexdigest(id2)[-20..-1]
 
   subject = @arg[:uri] + "/#{@db_name}:#{id1}"
   object = @arg[:uri] + "/#{@db_name}:#{id2}"
+
+  # if loosely coupled change subject - object
+  if @arg[:lcoupled] == 1
+    subject = @arg[:uri] + "/#{@db_name}_#{obj1}:#{id1}"
+    object = @arg[:uri] + "/#{@db_name}_#{obj2}:#{id2}"
+  end
 
   qd = RDF::Graph.new()
   if bothways
@@ -165,8 +173,8 @@ def recordlink2rdf row, obj1, obj2, bothways
     qd = serialize_quad(["#{subject}", "#{p}", "#{object}"], false)
     fout.write(qd.dump(:nquads))
   else
-    p = @arg[:uri] + "/mine_vocabulary:has#{obj1}"
-    qd = serialize_quad(["#{object}", "#{p}", "#{subject}"], false)
+    p = @arg[:uri] + "/mine_vocabulary:has#{obj2}"
+    qd = serialize_quad(["#{subject}", "#{p}", "#{object}"], false)
     fout.write(qd.dump(:nquads))
   end
 
@@ -188,28 +196,29 @@ def subClassOf row, child_obj, parent_obj
   # object inherit from parent object ??
   # TODO find another predicate here
 
-  # File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
-  #   qd = RDF::Graph.new()
-  #   s = @arg[:uri] + "/#{child_obj.downcase}:#{id}"
-  #   p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
-  #   o = @arg[:uri] + "/#{parent_obj.downcase}:#{id}"
-  #   qd = serialize_quad([s, p ,o], false)
-  #   fout.write(qd.dump(:nquads))
-  # end
+  # if loosely coupled create link between objects
+  if @arg[:lcoupled] == 1
+    File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
+      qd = RDF::Graph.new()
+      s = @arg[:uri] + "/#{@db_name}_#{child_obj.downcase}:#{id}"
+      p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+      o = @arg[:uri] + "/#{@db_name}_#{parent_obj.downcase}:#{id}"
+      qd = serialize_quad([s, p ,o], false)
+      fout.write(qd.dump(:nquads))
+    end
+  end
 
   # class subClassOf parent class
   File.open("#{@arg[:output]}/Classes.nq", "a") do |fout|
     qd = RDF::Graph.new()
-    s = @arg[:uri] + "/resource/#{parent_obj}"
+    s = @arg[:uri] + "/resource/#{@db_name}_#{child_obj}"
     p = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
-    o = @arg[:uri] + "/resource/#{child_obj}"
+    o = @arg[:uri] + "/resource/#{@db_name}_#{parent_obj}"
     qd = serialize_quad([s, p ,o], false)
     fout.write(qd.dump(:nquads))
   end
 
 end
-
-
 
 # query intermine endpoint
 def rdfize_data
@@ -244,6 +253,13 @@ def rdfize_data
       end
 
       File.open("#{@arg[:output]}/#{@all_obj[obj][:name]}.tsv") do |file|
+
+        # first record store the key for further dbxref lookup
+        l = file.gets
+        store_fields_to_obj(l, obj)
+        record2rdf(l,@all_obj[obj][:name])
+
+        # iterate over all the other records
         while l = file.gets
           record2rdf(l,@all_obj[obj][:name])
         end
@@ -302,18 +318,29 @@ def rdfize_data
 end
 
 
+
 # create linked data with other open ld sources
 def dbxref
 
-  # Get the identifiers
-  xref = @all_obj["CrossReference"]
-  
+  @all_obj.each do |k,obj|
 
-  # Query Bio2RDF for the identifiers
-  
+    obj[:fields].each do |fA|
 
-  # rdf:seeAlso for more info on the resource
+      # don't process the primary key
+      next if fA[0] == "id"
 
+      if fA[0].downcase =~ /id/ or fA[0].downcase =~ /code/
+
+        # Query Bio2RDF for the identifiers
+
+        # Build all the rdf:seeAlso triples for the object table
+
+
+      end
+
+    end
+
+  end
 
 end
 
@@ -503,7 +530,7 @@ def get_classes
 end
 
 
-# set config 
+# set config
 def set_configuration
 
   Dir.mkdir("#{@arg[:output]}") if ! Dir.exists? "#{@arg[:output]}"
@@ -550,7 +577,7 @@ end
 
 @usage = "
 # This script will query an intermine endpoint via their API and transform the data 
-# into RDF nquads files based on the Intermine's instance model file.
+# into RDF nquads files based on the instance's xml object model file :
 # http://examplemine.example.org/mymine/service/model
 
 intermine-rdfizer.rb --endpoint [URL] --output [dirname]
@@ -558,11 +585,25 @@ intermine-rdfizer.rb --endpoint [URL] --output [dirname]
 	[OPTIONS]
         	--download	will ONLY download table TSV files
 		--rdfize	will ONLY RDFize TSV files in output/*.tsv
+		                DEFAULT is both --download and --rdfize (omit options will do both)
 
-		DEFAULT is --download and --rdfize (omit options will do both)
-
-		--uri		specify a base url for the URI (ex: purl.yeastgenome.org)
+		--uri <baseuri> specify a base url for the URI (ex: purl.yeastgenome.org)
 				DEFAULT mymine.intermine.org
+
+		--dbxref <file>	mapping for dbxref [ontology or crossreference] tables in a CSV file...
+				Columns :
+				Type[Ontology|CrossReference], DB/Ontology name, URI-Prefix
+				Example :
+				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/
+				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:
+				Ontology,GO,http://purl.obolibrary.org/GO_
+				Ontology,SO,http://purl.obolibrary.org/SO_
+
+		--lcoupled	loosely coupled, when pass with --rdfize it will makes different
+				resources for a same record based on the table the info is extracted.
+				for example : the same gene, cds, orf won't be merged into a single
+				resource but kept appart and linked together.
+				By default it will be merged into a single resource and get bseveral types.
 
 "
 
@@ -576,8 +617,10 @@ job = ARGV[0].downcase
 @arg[:log] = []
 @arg[:download] = 0
 @arg[:rdfize] = 0
+@arg[:lcoupled] = 0
 @arg[:conf] = ""
 @arg[:uri] = ""
+
 
 # reading opts
 for i in 0..ARGV.length-1
@@ -587,10 +630,13 @@ for i in 0..ARGV.length-1
     @arg[:download] = 1
   elsif key == "rdfize"
     @arg[:rdfize] = 1
+  elsif key == "lcoupled"
+    @arg[:lcoupled] = 1
   else
     @arg[key.to_sym] = ARGV[i+1]
   end
 end
+
 
 # default options do both download and rdfize
 if (@arg[:download] + @arg[:rdfize]) == 0
@@ -599,7 +645,7 @@ if (@arg[:download] + @arg[:rdfize]) == 0
 end
 
 nb_of_opt = 0
-mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log]
+mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lcoupled]
 
 @arg.each_key do |k|
   nb_of_opt += 1
@@ -609,7 +655,7 @@ mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log]
   end
 end
 
-abort @usage if nb_of_opt != 7
+abort @usage if nb_of_opt != 8
 
 # set all configurations
 ShellSpinner "# Setting configuration" do
@@ -632,9 +678,12 @@ end
 # LOGS output
 puts ""
 puts "## LOGS of the processing ## "
+flog = File.open("intermine-rdfizer.log","w")
 @arg[:log].each do |l|
   puts "#{l}"
+  flog.write("#{l}\n")
 end
+flog.close
 puts ""
 puts "Time for download :"
 puts time_download
