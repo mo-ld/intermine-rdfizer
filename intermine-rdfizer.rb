@@ -22,6 +22,12 @@ require 'benchmark'
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 RDF_VALUE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#value"
 
+@ontologies = {
+  "skos" => "http://www.w3.org/2004/02/skos/core#",
+  "rdf" => "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+  "rdfs" => "http://www.w3.org/2000/01/rdf-schema#",
+  "owl" => "http://www.w3.org/2002/07/owl#"
+}
 
 # which kind of literal
 # return: integer, float, string
@@ -201,7 +207,7 @@ def subClassOf row, child_obj, parent_obj
     File.open("#{@arg[:output]}/#{parent_obj}.nq", "a") do |fout|
       qd = RDF::Graph.new()
       s = @arg[:uri] + "/#{@db_name}_#{child_obj.downcase}:#{id}"
-      p = RDF::URI("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+      p = @ontologies["rdfs"]+"subClassOf"
       o = @arg[:uri] + "/#{@db_name}_#{parent_obj.downcase}:#{id}"
       qd = serialize_quad([s, p ,o], false)
       fout.write(qd.dump(:nquads))
@@ -212,7 +218,7 @@ def subClassOf row, child_obj, parent_obj
   File.open("#{@arg[:output]}/Classes.nq", "a") do |fout|
     qd = RDF::Graph.new()
     s = @arg[:uri] + "/resource/#{@db_name}_#{child_obj}"
-    p = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
+    p = @ontologies["rdfs"]+"subClassOf"
     o = @arg[:uri] + "/resource/#{@db_name}_#{parent_obj}"
     qd = serialize_quad([s, p ,o], false)
     fout.write(qd.dump(:nquads))
@@ -253,11 +259,6 @@ def rdfize_data
       end
 
       File.open("#{@arg[:output]}/#{@all_obj[obj][:name]}.tsv") do |file|
-
-        # first record store the key for further dbxref lookup
-        l = file.gets
-        store_fields_to_obj(l, obj)
-        record2rdf(l,@all_obj[obj][:name])
 
         # iterate over all the other records
         while l = file.gets
@@ -318,33 +319,107 @@ def rdfize_data
 end
 
 
-
 # create linked data with other open ld sources
 def dbxref
 
-  @all_obj.each do |k,obj|
-
-    obj[:fields].each do |fA|
-
-      # don't process the primary key
-      next if fA[0] == "id"
-
-      if fA[0].downcase =~ /id/ or fA[0].downcase =~ /code/
-
-        # Query Bio2RDF for the identifiers
-
-        # Build all the rdf:seeAlso triples for the object table
-
-
+  dbxref_hash = {}
+  File.open("#{@arg[:dbxref]}","r") do |f|
+    while l = f.gets
+      next if l[0] == "#"
+      lA = l.chomp.split(",")
+      lA.each { |x| x.strip! }
+      if ! dbxref_hash.has_key? lA[1].downcase
+        dbxref_hash[lA[1].downcase] = []
       end
-
+      dbxref_hash[lA[1].downcase] << {type: lA[0].downcase, uri_base: lA[2], uri_rel: lA[3]}
     end
-
   end
 
+  datasource_type = RDF::URI("#{@arg[:uri]}/resource/#{@db_name}_DataSource")
+  ontology_type = RDF::URI("#{@arg[:uri]}/resource/#{@db_name}_Ontology")
+  rdfs_label = RDF::URI(@ontologies["rdfs"] + "label")
+
+  # Get DataSource Labels
+  datasource_uri = {}
+  if File.exists? ("./#{@arg[:output]}/DataSource.nq")
+    graph = RDF::Graph.load("./#{@arg[:output]}/DataSource.nq")
+    query = RDF::Query.new({
+                             datasource: {
+                               RDF.type => datasource_type,
+                               rdfs_label => :label
+                             }
+                           })
+    query.execute(graph).each do |solution|
+      # datasource_uri["#{solution.label}"] = "#{solution.datasource}"
+      datasource_uri["#{solution.datasource}"] = "#{solution.label.to_s.downcase}"
+    end
+  end
+
+  # Get Ontology Labels
+  # ontology_uri = {}
+  if File.exists? ("./#{@arg[:output]}/Ontology.nq")
+    graph = RDF::Graph.load("./#{@arg[:output]}/Ontology.nq")
+    query = RDF::Query.new({
+                             ontology: {
+                               RDF.type => ontology_type,
+                               rdfs_label => :label
+                             }
+                           })
+    query.execute(graph).each do |solution|
+      # ontology_uri["#{solution.label}"] = "#{solution.ontology}"
+      datasource_uri["#{solution.ontology}"] = "#{solution.label.to_s.downcase}"
+    end
+  end
+
+  fout = File.open("#{@arg[:output]}/_dbxref.nq", "w")
+
+  # Processing CrossReference ..
+  if File.exists? "./#{@arg[:output]}/CrossReference.nq"
+    graph = RDF::Graph.load("./#{@arg[:output]}/CrossReference.nq")
+    crossreference_type = RDF::URI("#{@arg[:uri]}/resource/#{@db_name}_CrossReference")
+    hasDatasource = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasDataSource")
+    hasIdentifier = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasIdentifier")
+    hasValue = RDF::URI(@ontologies["rdf"]+"value")
+    query = RDF::Query.new do
+      pattern [:uri, RDF.type, crossreference_type]
+      pattern [:uri, hasIdentifier, :attribute]
+      pattern [:uri, hasDatasource, :datasource]
+      pattern [:attribute, hasValue, :id]
+    end
+    query.execute(graph).each do |solution|
+      # ontology_uri["#{solution.label}"] = "#{solution.ontology}"
+      # puts "#{solution.uri} #{solution.datasource} #{solution.id}"
+      db_label = datasource_uri["#{solution.datasource}"]
+      next if ! dbxref_hash.has_key? db_label
+      dbxref_hash[db_label].each do |db|
+        graph_out = RDF::Graph.new()
+        s = RDF::URI("#{solution.uri}")
+        relation = db[:uri_rel]
+        p = RDF::URI(relation)
+        if relation[0..6] != "http://"
+          relA = relation.split(":")
+          next if ! @ontologies.has_key? relA[0]
+          p = RDF::URI(@ontologies[relA[0]]+"#{relA[1]}")
+        end
+        o = RDF::URI("#{db[:uri_base]}#{solution.id}")
+        statement = RDF::Statement.new(s,p,o)
+        if statement.valid?
+          graph_out << statement
+          fout.write(graph_out.dump(:nquads))
+        end
+      end
+    end
+  end
+
+  fout.close
+
+  puts "Printing .."
+  p datasource_uri
+  puts ""
+  p dbxref_hash
+  puts "Finish"
+
 end
-
-
 
 # download intermine data
 def download_data
@@ -370,7 +445,6 @@ def download_data
     end
   end
 
-
   # download data to table
   puts "\n# Fetching all mine object classes (with the API) #"
   @all_obj.each_key do |obj|
@@ -386,7 +460,7 @@ def download_data
           each_row { |r| fout.write("#{r}\n") }
       rescue Exception => e
         print "\n#{e.message}\n"
-        retry_it += 1            
+        retry_it += 1
         sleep (retry_it*20)
         retry if retry_it < 7
         print "Giving up after 5 attempts"
@@ -421,7 +495,6 @@ def download_data
       end
       fout.close
     end
-
 
     # downloading object collections
     @all_obj[obj][:collections].each do |collection|
@@ -477,7 +550,7 @@ def get_classes
           obj_table[key.to_sym] << c
         end
       else
-        obj_table[key.to_sym] = att.value.to_s        
+        obj_table[key.to_sym] = att.value.to_s
       end
     end
 
@@ -540,7 +613,6 @@ def set_configuration
     file << open("#{@arg[:endpoint]}/service/model").read
   end
 
-
   @db_name = ""
   @arg[:endpoint].split("/").reverse.each do |n|
     if n != ""
@@ -582,22 +654,26 @@ end
 
 intermine-rdfizer.rb --endpoint [URL] --output [dirname]
 
-	[OPTIONS]
+	[COMMANDS]  omit all will run --download and --rdfize ; --dbxref can be run afterward
+
         	--download	will ONLY download table TSV files
 		--rdfize	will ONLY RDFize TSV files in output/*.tsv
-		                DEFAULT is both --download and --rdfize (omit options will do both)
 
+		--dbxref <file>	mapping for dbxref [ontology / crossreference] tables in a CSV file...
+				Need the core.xml object tables Ontology and/or CrossReference and
+				the NQuads files, generated with --rdfize
+				Columns :
+				Type[Ontology|CrossReference], DB/Ontology name, URI-Prefix, URI-relation
+				Example :
+				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/,skos:broadMatch
+				CrossReference,Uniprot,http://bio2rdf.org/uniprot:,rdfs:seeAlso
+				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:,skos:broadMatch:
+				Ontology,GO,http://purl.obolibrary.org/GO_,owl:sameAs
+				Ontology,SO,http://purl.obolibrary.org/SO_,owl:sameAs
+
+	[OPTIONS]
 		--uri <baseuri> specify a base url for the URI (ex: purl.yeastgenome.org)
 				DEFAULT mymine.intermine.org
-
-		--dbxref <file>	mapping for dbxref [ontology or crossreference] tables in a CSV file...
-				Columns :
-				Type[Ontology|CrossReference], DB/Ontology name, URI-Prefix
-				Example :
-				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/
-				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:
-				Ontology,GO,http://purl.obolibrary.org/GO_
-				Ontology,SO,http://purl.obolibrary.org/SO_
 
 		--lcoupled	loosely coupled, when pass with --rdfize it will makes different
 				resources for a same record based on the table the info is extracted.
@@ -617,7 +693,9 @@ job = ARGV[0].downcase
 @arg[:log] = []
 @arg[:download] = 0
 @arg[:rdfize] = 0
+@arg[:dbxref] = ""
 @arg[:lcoupled] = 0
+@arg[:dbxref] = ""
 @arg[:conf] = ""
 @arg[:uri] = ""
 
@@ -639,13 +717,13 @@ end
 
 
 # default options do both download and rdfize
-if (@arg[:download] + @arg[:rdfize]) == 0
+if (@arg[:download] + @arg[:rdfize]) == 0 and @arg[:dbxref] == ""
   @arg[:download] = 1
   @arg[:rdfize] = 1
 end
 
 nb_of_opt = 0
-mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lcoupled]
+mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lcoupled, :dbxref]
 
 @arg.each_key do |k|
   nb_of_opt += 1
@@ -655,7 +733,7 @@ mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lc
   end
 end
 
-abort @usage if nb_of_opt != 8
+abort @usage if nb_of_opt != 9
 
 # set all configurations
 ShellSpinner "# Setting configuration" do
@@ -671,7 +749,15 @@ end
 time_rdfize = Benchmark.measure do
   if @arg[:rdfize] == 1
     rdfize_data
-    dbxref
+  end
+end
+
+# rdfizing data
+time_dbxref = Benchmark.measure do
+  if @arg[:dbxref] != ""
+    ShellSpinner "# Creating Cross References" do
+      dbxref
+    end
   end
 end
 
@@ -685,7 +771,9 @@ flog = File.open("intermine-rdfizer.log","w")
 end
 flog.close
 puts ""
-puts "Time for download :"
+puts "Time to download :"
 puts time_download
-puts "Time for rdfize :"
+puts "Time to rdfize :"
 puts time_rdfize
+puts "Time to interlink :"
+puts time_dbxref
