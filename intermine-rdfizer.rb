@@ -665,11 +665,10 @@ intermine-rdfizer.rb --endpoint [URL] --output [dirname]
 				Columns :
 				Type[Ontology|CrossReference], DB/Ontology name, URI-Prefix, URI-relation
 				Example :
-				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/,skos:broadMatch
-				CrossReference,Uniprot,http://bio2rdf.org/uniprot:,rdfs:seeAlso
-				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:,skos:broadMatch:
-				Ontology,GO,http://purl.obolibrary.org/GO_,owl:sameAs
-				Ontology,SO,http://purl.obolibrary.org/SO_,owl:sameAs
+				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/,skos:exactMatch
+				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:,skos:exactMatch
+				Ontology,GO,http://bio2rdf.org/go:,skos:exactMatch
+				Ontology,SO,http://purl.obolibrary.org/obo/SO_,owl:sameAs
 
 	[OPTIONS]
 		--uri <baseuri> specify a base url for the URI (ex: purl.yeastgenome.org)
