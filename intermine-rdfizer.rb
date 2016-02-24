@@ -678,7 +678,7 @@ intermine-rdfizer.rb --endpoint [URL] --output [dirname]
 				resources for a same record based on the table the info is extracted.
 				for example : the same gene, cds, orf won't be merged into a single
 				resource but kept appart and linked together.
-				By default it will be merged into a single resource and get bseveral types.
+				By default it will be merged into a single resource and get different types.
 
 "
 
