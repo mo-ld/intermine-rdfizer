@@ -39,7 +39,7 @@ ruby intermine-rdfizer.rb --endpoint http://flymine.org/flymine --output flymine
 
 To create Linked Data - database cross references - you need to provide a CSV file with these fields :
 
-* Type [Ontology||CrossReference] (tables from the core object model of Intermine see https://github.com/intermine/intermine/blob/master/bio/core/core.xml)
+* Type (Ontology or CrossReference) (need those tables in the object model see https://github.com/intermine/intermine/blob/master/bio/core/core.xml)
 * DB/Ontology name
 * URI-Prefix (for the target ontology/database)
 * URI-relation (predicate)
