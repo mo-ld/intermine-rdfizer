@@ -98,7 +98,7 @@ intermine-rdfizer.rb --endpoint [URL] --output [dirname]
                                 resources for a same record based on the table the info is extracted from.
                                 Example : the same gene, cds, orf won't be merged into a single
                                 resource but kept appart and linked together.
-                                By default --lcoupled is off and the different types will be merged
-                                into a single resource and be typed accordingly.
+                                By default --lcoupled is off and the information from the tables will
+                                be merged into a single resource that'd be typed accordingly.
 
 ```
