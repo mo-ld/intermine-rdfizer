@@ -9,13 +9,12 @@ require 'open-uri'
 require 'nokogiri'
 require 'rdf'
 require 'rdf/nquads'
-require 'sparql'
 require "intermine/service"
 require 'json'
 require 'digest'
 require 'shell-spinner'
 require 'benchmark'
-
+require 'net/http'
 
 # CORE RDF URI
 # @arg[:uri] = "http://purl.intermine.org"
@@ -319,19 +318,254 @@ def rdfize_data
 end
 
 
+# ask if resource exist
+def ask_query endpoint, uri
+  
+  url_split = endpoint.split("/")
+  http = ""
+  if url_split[2].include?(":")
+    http = Net::HTTP.new(url_split[2].split(":")[0],url_split[2].split(":")[1])
+  else
+    http = Net::HTTP.new(url_split[2])
+  end
+
+  try_count = 0
+  begin
+    q = "ask {<#{uri}> $p $o}"
+    new_uri = endpoint+"?query=#{q}&format=json"
+    req = http.request_get(URI(new_uri))
+    res = JSON.parse(req.body)
+    result = res['boolean'].to_s
+    # puts "#{q} #{result}"
+  rescue
+    try_count += 1
+    if try_count < 6
+      sleep (2*try_count)
+      retry
+    end
+    puts "problem with #{endpoint} not responding"
+    result = "false"
+  end
+  result
+
+end
+
+
+
 # create linked data with other open ld sources
-def dbxref
+def dbxref_with_sparql
+
+  sparql = nil
+  http = nil
+  if @arg[:sparql] != ""
+    sparql = @arg[:sparql]
+    url_split = @arg[:sparql].split("/")
+    if url_split[2].include?(":")
+      http = Net::HTTP.new(url_split[2].split(":")[0],url_split[2].split(":")[1])
+    else
+      http = Net::HTTP.new(url_split[2])
+    end
+    http.read_timeout = 360000000 # seconds
+    http.open_timeout = 360000000 # seconds
+  end
 
   dbxref_hash = {}
+  puts "..reading links file"
   File.open("#{@arg[:dbxref]}","r") do |f|
     while l = f.gets
-      next if l[0] == "#"
+      next if l[0] == "#" or l[0]=="\n"
       lA = l.chomp.split(",")
       lA.each { |x| x.strip! }
       if ! dbxref_hash.has_key? lA[1].downcase
         dbxref_hash[lA[1].downcase] = []
       end
-      dbxref_hash[lA[1].downcase] << {type: lA[0].downcase, uri_base: lA[2], uri_rel: lA[3]}
+      dbxref_hash[lA[1].downcase] << {type: lA[0].downcase, uri_base: lA[2], uri_rel: lA[3], sparql: lA[4]}
+    end
+  end
+
+  datasource_type = "<#{@arg[:uri]}/resource/#{@db_name}_DataSource>"
+  ontology_type = "<#{@arg[:uri]}/resource/#{@db_name}_Ontology>"
+  rdfs_label = "<" + @ontologies["rdfs"] + "label>"
+
+  # Get DataSource Labels
+  datasource_uri = {}
+  puts "..reading datasources"
+  try_count = 0
+  begin
+      q = "select * where {$datasource <#{RDF.type}> #{datasource_type} . $datasource #{rdfs_label} $label .}"
+      new_uri = sparql+"?query=#{URI.encode(q)}&format=json"
+      req = http.request_get(URI(new_uri))
+      res = JSON.parse(req.body)
+      # puts res
+      res['results']['bindings'].each do |r|
+        puts "#{r['datasource']['value']}"+ " #{r['label']['value'].to_s.downcase}"
+        datasource_uri["#{r['datasource']['value']}"] = "#{r['label']['value'].to_s.downcase}"        
+      end
+  rescue
+    try_count += 1
+    if try_count < 6
+      sleep (try_count*2)
+      retry
+    end
+    puts "! error: problem getting datasources "
+  end
+
+  # Get Ontology Labels
+  puts "..reading ontologies"
+  try_count = 0
+  begin
+    q = "select * where {$ontology <#{RDF.type}> #{ontology_type} . $ontology #{rdfs_label} $label .}"
+    new_uri = sparql+"?query=#{URI.encode(q)}&format=json"
+    req = http.request_get(URI(new_uri))
+    res = JSON.parse(req.body)
+    # puts res
+    res['results']['bindings'].each do |r|
+      puts "#{r['ontology']['value']}"+ " #{r['label']['value'].to_s.downcase}"
+      datasource_uri["#{r['ontology']['value']}"] = "#{r['label']['value'].to_s.downcase}"
+    end
+  rescue
+    try_count += 1
+    if try_count < 6
+      sleep (try_count*2)
+      retry
+    end
+    puts "! error: problem getting ontologies "
+  end
+
+
+  # Graph output
+  fout = File.open("#{@arg[:output]}/_dbxref.nq", "w")
+  fout_real = File.open("#{@arg[:output]}/_dbxref_real.nq", "w")
+
+  # Processing CrossReference
+  puts "..processing cross references"
+  try_count = 0
+  begin
+    graph_out = RDF::Graph.new()
+    graph_out_real = RDF::Graph.new()
+    crossreference_type = "<#{@arg[:uri]}/resource/#{@db_name}_CrossReference>"
+    hasDatasource = "<#{@arg[:uri]}" + "/mine_vocabulary:hasDataSource>"
+    hasIdentifier = "<#{@arg[:uri]}" + "/mine_vocabulary:hasIdentifier>"
+    hasValue = "<"+@ontologies["rdf"]+"value>"
+    q = "select * where {$uri <#{RDF.type}> #{crossreference_type} . $uri #{hasIdentifier} $attribute . $uri #{hasDatasource} $datasource . $attribute #{hasValue} $id}"
+    new_uri = sparql+"?query=#{URI.encode(q)}&format=json"
+    req = http.request_get(URI(new_uri))
+    res = JSON.parse(req.body)
+    res['results']['bindings'].each do |r|
+      db_label = datasource_uri["#{r['datasource']['value']}"]
+      next if ! dbxref_hash.has_key? db_label
+      dbxref_hash[db_label].each do |db|
+        s = RDF::URI("#{r['uri']['value']}")
+        relation = db[:uri_rel]
+        p = RDF::URI(relation)
+        if relation[0..6] != "http://"
+          relA = relation.split(":")
+          next if ! @ontologies.has_key? relA[0]
+          p = RDF::URI(@ontologies[relA[0]]+"#{relA[1]}")
+        end
+        object = r['id']['value'].to_s
+        if r['id']['value'].to_s.include? ":"
+          object = r['id']['value'].to_s.split(":")[1]
+        end
+        o = RDF::URI("#{db[:uri_base]}#{object}")
+        statement = RDF::Statement.new(s,p,o)
+        statement = RDF::Statement.new(s,p,o)
+        if statement.valid?
+          graph_out << statement
+          if (ask_query db[:sparql], "#{db[:uri_base]}#{object}") == "true"
+            graph_out_real << statement
+          end
+        end
+      end
+    end
+    fout.write(graph_out.dump(:nquads))
+    fout_real.write(graph_out_real.dump(:nquads))
+  rescue => e
+    puts e
+    try_count += 1
+    if try_count < 6
+      sleep (try_count*2)
+      retry
+    end
+    puts "! error: problem processing cross-references "
+  end
+
+
+  # Processing Ontology Terms
+  puts "..processing cross ontology"
+  try_count = 0
+  begin
+    graph_out = RDF::Graph.new()
+    graph_out_real = RDF::Graph.new()
+    crossreference_type = "<#{@arg[:uri]}/resource/#{@db_name}_OntologyTerm>"
+    hasDatasource = "<#{@arg[:uri]}" + "/mine_vocabulary:hasOntology>"
+    hasIdentifier = "<#{@arg[:uri]}" + "/mine_vocabulary:hasIdentifier>"
+    hasValue = "<"+@ontologies["rdf"]+"value>"
+    q = "select * where {$uri <#{RDF.type}> #{crossreference_type} . $uri #{hasIdentifier} $attribute . $uri #{hasDatasource} $datasource . $attribute #{hasValue} $id}"
+    new_uri = sparql+"?query=#{URI.encode(q)}&format=json"
+    req = http.request_get(URI(new_uri))
+    res = JSON.parse(req.body)
+    res['results']['bindings'].each do |r|
+      db_label = datasource_uri["#{r['datasource']['value']}"]
+      next if ! dbxref_hash.has_key? db_label
+      dbxref_hash[db_label].each do |db|
+        s = RDF::URI("#{r['uri']['value']}")
+        relation = db[:uri_rel]
+        p = RDF::URI(relation)
+        if relation[0..6] != "http://"
+          relA = relation.split(":")
+          next if ! @ontologies.has_key? relA[0]
+          p = RDF::URI(@ontologies[relA[0]]+"#{relA[1]}")
+        end
+        object = r['id']['value'].to_s
+        if r['id']['value'].to_s.include? ":"
+          object = r['id']['value'].to_s.split(":")[1]
+        end
+        o = RDF::URI("#{db[:uri_base]}#{object}")
+        statement = RDF::Statement.new(s,p,o)
+        statement = RDF::Statement.new(s,p,o)
+        if statement.valid?
+          graph_out << statement
+          if (ask_query db[:sparql], "#{db[:uri_base]}#{object}") == "true"
+            graph_out_real << statement
+          end
+        end
+      end
+    end
+    fout.write(graph_out.dump(:nquads))
+    fout_real.write(graph_out_real.dump(:nquads))
+  rescue => e
+    puts e
+    try_count += 1
+    if try_count < 6
+      sleep (try_count*2)
+      retry
+    end
+    puts "! error: problem processing cross-references "
+  end
+
+  fout.close
+  fout_real.close
+
+  puts "Finish"
+
+end
+
+
+# create linked data with other open ld sources
+def dbxref_without_sparql
+
+  dbxref_hash = {}
+  puts "..reading links file"
+  File.open("#{@arg[:dbxref]}","r") do |f|
+    while l = f.gets
+      next if l[0] == "#" or l[0]=="\n"
+      lA = l.chomp.split(",")
+      lA.each { |x| x.strip! }
+      if ! dbxref_hash.has_key? lA[1].downcase
+        dbxref_hash[lA[1].downcase] = []
+      end
+      dbxref_hash[lA[1].downcase] << {type: lA[0].downcase, uri_base: lA[2], uri_rel: lA[3], sparql: lA[4]}
     end
   end
 
@@ -341,7 +575,9 @@ def dbxref
 
   # Get DataSource Labels
   datasource_uri = {}
+  puts "..reading datasource.nq file"
   if File.exists? ("./#{@arg[:output]}/DataSource.nq")
+
     graph = RDF::Graph.load("./#{@arg[:output]}/DataSource.nq")
     query = RDF::Query.new({
                              datasource: {
@@ -349,14 +585,17 @@ def dbxref
                                rdfs_label => :label
                              }
                            })
+
     query.execute(graph).each do |solution|
       # datasource_uri["#{solution.label}"] = "#{solution.datasource}"
       datasource_uri["#{solution.datasource}"] = "#{solution.label.to_s.downcase}"
     end
+
   end
 
   # Get Ontology Labels
   # ontology_uri = {}
+  puts "..reading ontology.nq file"
   if File.exists? ("./#{@arg[:output]}/Ontology.nq")
     graph = RDF::Graph.load("./#{@arg[:output]}/Ontology.nq")
     query = RDF::Query.new({
@@ -371,11 +610,14 @@ def dbxref
     end
   end
 
+  # Processing CrossReference
+  puts "..processing cross references"
   fout = File.open("#{@arg[:output]}/_dbxref.nq", "w")
-
-  # Processing CrossReference ..
+  fout_real = File.open("#{@arg[:output]}/_dbxref_real.nq", "w")
   if File.exists? "./#{@arg[:output]}/CrossReference.nq"
+
     graph = RDF::Graph.load("./#{@arg[:output]}/CrossReference.nq")
+    puts "..loading graph [done]"
     crossreference_type = RDF::URI("#{@arg[:uri]}/resource/#{@db_name}_CrossReference")
     hasDatasource = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasDataSource")
     hasIdentifier = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasIdentifier")
@@ -386,13 +628,14 @@ def dbxref
       pattern [:uri, hasDatasource, :datasource]
       pattern [:attribute, hasValue, :id]
     end
+    graph_out = RDF::Graph.new()
+    graph_out_real = RDF::Graph.new()
     query.execute(graph).each do |solution|
       # ontology_uri["#{solution.label}"] = "#{solution.ontology}"
       # puts "#{solution.uri} #{solution.datasource} #{solution.id}"
       db_label = datasource_uri["#{solution.datasource}"]
       next if ! dbxref_hash.has_key? db_label
       dbxref_hash[db_label].each do |db|
-        graph_out = RDF::Graph.new()
         s = RDF::URI("#{solution.uri}")
         relation = db[:uri_rel]
         p = RDF::URI(relation)
@@ -401,17 +644,77 @@ def dbxref
           next if ! @ontologies.has_key? relA[0]
           p = RDF::URI(@ontologies[relA[0]]+"#{relA[1]}")
         end
-        o = RDF::URI("#{db[:uri_base]}#{solution.id}")
+        object = solution.id.to_s
+        if solution.id.to_s.include? ":"
+          object = solution.id.to_s.split(":")[1]
+        end
+        o = RDF::URI("#{db[:uri_base]}#{object}")
         statement = RDF::Statement.new(s,p,o)
         if statement.valid?
           graph_out << statement
-          fout.write(graph_out.dump(:nquads))
+          if (ask_query db[:sparql], "#{db[:uri_base]}#{object}") == "true"
+            graph_out_real << statement
+          end
         end
       end
     end
+    fout.write(graph_out.dump(:nquads))
+    fout_real.write(graph_out_real.dump(:nquads))
+  end
+
+  # Processing Ontologies
+  puts "..processing ontologies"
+  fout = File.open("#{@arg[:output]}/_dbxref.nq", "a")
+  fout_real = File.open("#{@arg[:output]}/_dbxref_real.nq", "a")
+  if File.exists? "./#{@arg[:output]}/OntologyTerm.nq"
+    graph = RDF::Graph.load("./#{@arg[:output]}/OntologyTerm.nq")
+    puts "..loading graph [done]"
+    crossreference_type = RDF::URI("#{@arg[:uri]}/resource/#{@db_name}_OntologyTerm")
+    hasDatasource = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasDataSource")
+    hasIdentifier = RDF::URI("#{@arg[:uri]}" + "/mine_vocabulary:hasIdentifier")
+    hasValue = RDF::URI(@ontologies["rdf"]+"value")
+    query = RDF::Query.new do
+      pattern [:uri, RDF.type, crossreference_type]
+      pattern [:uri, hasIdentifier, :attribute]
+      pattern [:uri, hasDatasource, :datasource]
+      pattern [:attribute, hasValue, :id]
+    end
+    graph_out = RDF::Graph.new()
+    graph_out_real = RDF::Graph.new()
+    query.execute(graph).each do |solution|
+      # ontology_uri["#{solution.label}"] = "#{solution.ontology}"
+      # puts "#{solution.uri} #{solution.datasource} #{solution.id}"
+      db_label = datasource_uri["#{solution.datasource}"]
+      next if ! dbxref_hash.has_key? db_label
+      dbxref_hash[db_label].each do |db|
+        s = RDF::URI("#{solution.uri}")
+        relation = db[:uri_rel]
+        p = RDF::URI(relation)
+        if relation[0..6] != "http://"
+          relA = relation.split(":")
+          next if ! @ontologies.has_key? relA[0]
+          p = RDF::URI(@ontologies[relA[0]]+"#{relA[1]}")
+        end
+        object = solution.id.to_s
+        if solution.id.to_s.include? ":"
+          object = solution.id.to_s.split(":")[1]
+        end
+        o = RDF::URI("#{db[:uri_base]}#{object}")
+        statement = RDF::Statement.new(s,p,o)
+        if statement.valid?
+          graph_out << statement
+          if (ask_query db[:sparql], "#{db[:uri_base]}#{object}") == "true"
+            graph_out_real << statement
+          end
+        end
+      end
+    end
+    fout.write(graph_out.dump(:nquads))
+    fout_real.write(graph_out_real.dump(:nquads))
   end
 
   fout.close
+  fout_real.close
 
   puts "Printing .."
   p datasource_uri
@@ -663,14 +966,17 @@ intermine-rdfizer.rb --endpoint [URL] --output [dirname]
 				Need the core.xml object tables Ontology and/or CrossReference and
 				the NQuads files, generated with --rdfize
 				Columns :
-				Type[Ontology|CrossReference], DB/Ontology name, URI-Prefix, URI-relation
+				Type[Ontology|CrossReference],DB/Ontology name,URI-Prefix,URI-relation,SPARQL-Endpoint
 				Example :
-				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/,skos:exactMatch
+				CrossReference,Uniprot,http://purl.uniprot.org/uniprot/,skos:exactMatch,
 				CrossReference,NCBIgene,http://bio2rdf.org/ncbigene:,skos:exactMatch
 				Ontology,GO,http://bio2rdf.org/go:,skos:exactMatch
 				Ontology,SO,http://purl.obolibrary.org/obo/SO_,owl:sameAs
 
 	[OPTIONS]
+		--sparql <url>  use in conjonction of --dbxref to accelerate the linking creation process, you need
+				to have uploaded the generated data (--rdfize) into a sparql engine first
+
 		--uri <baseuri> specify a base url for the URI (ex: purl.yeastgenome.org)
 				DEFAULT mymine.intermine.org
 
@@ -697,6 +1003,7 @@ job = ARGV[0].downcase
 @arg[:dbxref] = ""
 @arg[:conf] = ""
 @arg[:uri] = ""
+@arg[:sparql] = ""
 
 
 # reading opts
@@ -722,7 +1029,7 @@ if (@arg[:download] + @arg[:rdfize]) == 0 and @arg[:dbxref] == ""
 end
 
 nb_of_opt = 0
-mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lcoupled, :dbxref]
+mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lcoupled, :dbxref, :sparql]
 
 @arg.each_key do |k|
   nb_of_opt += 1
@@ -732,7 +1039,7 @@ mandatory_keys = [:endpoint, :uri, :conf, :output, :download, :rdfize, :log, :lc
   end
 end
 
-abort @usage if nb_of_opt != 9
+abort @usage if nb_of_opt != 10
 
 # set all configurations
 ShellSpinner "# Setting configuration" do
@@ -754,8 +1061,14 @@ end
 # rdfizing data
 time_dbxref = Benchmark.measure do
   if @arg[:dbxref] != ""
-    ShellSpinner "# Creating Cross References" do
-      dbxref
+    # ShellSpinner "# Creating Cross References" do
+    #   dbxref
+    # end
+    puts "# Creating cross references"
+    if @arg[:sparql] != ""
+      dbxref_with_sparql
+    else
+      dbxref_without_sparql
     end
   end
 end
