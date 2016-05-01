@@ -320,7 +320,7 @@ end
 
 # ask if resource exist
 def ask_query endpoint, uri
-  
+
   url_split = endpoint.split("/")
   http = ""
   if url_split[2].include?(":")
@@ -399,7 +399,7 @@ def dbxref_with_sparql
       # puts res
       res['results']['bindings'].each do |r|
         puts "#{r['datasource']['value']}"+ " #{r['label']['value'].to_s.downcase}"
-        datasource_uri["#{r['datasource']['value']}"] = "#{r['label']['value'].to_s.downcase}"        
+        datasource_uri["#{r['datasource']['value']}"] = "#{r['label']['value'].to_s.downcase.strip}"
       end
   rescue
     try_count += 1
@@ -421,7 +421,7 @@ def dbxref_with_sparql
     # puts res
     res['results']['bindings'].each do |r|
       puts "#{r['ontology']['value']}"+ " #{r['label']['value'].to_s.downcase}"
-      datasource_uri["#{r['ontology']['value']}"] = "#{r['label']['value'].to_s.downcase}"
+      datasource_uri["#{r['ontology']['value']}"] = "#{r['label']['value'].to_s.downcase.strip}"
     end
   rescue
     try_count += 1
@@ -431,7 +431,6 @@ def dbxref_with_sparql
     end
     puts "! error: problem getting ontologies "
   end
-
 
   # Graph output
   fout = File.open("#{@arg[:output]}/_dbxref.nq", "w")
@@ -469,12 +468,13 @@ def dbxref_with_sparql
         end
         o = RDF::URI("#{db[:uri_base]}#{object}")
         statement = RDF::Statement.new(s,p,o)
-        statement = RDF::Statement.new(s,p,o)
         if statement.valid?
           graph_out << statement
           if (ask_query db[:sparql], "#{db[:uri_base]}#{object}") == "true"
             graph_out_real << statement
           end
+        else
+          puts "ERROR : " + statement.inspect.to_s
         end
       end
     end
@@ -541,7 +541,7 @@ def dbxref_with_sparql
       sleep (try_count*2)
       retry
     end
-    puts "! error: problem processing cross-references "
+    puts "! error: problem processing cross-ontologies"
   end
 
   fout.close
