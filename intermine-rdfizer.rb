@@ -130,7 +130,7 @@ def record2rdf row, obj
     if f_ary[1] and @all_obj[obj][:attributes].include? f_ary[0]
 
       qd = RDF::Graph.new()
-      if f_ary[0].include? "name"
+      if f_ary[0] == "name"
         p = "http://www.w3.org/2000/01/rdf-schema#label"
         qd = serialize_quad(["#{subject}", "#{p}", "#{f_ary[1]}"], false)
       elsif f_ary[0] == "id"
